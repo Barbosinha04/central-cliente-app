@@ -51,20 +51,20 @@ def verificar_senha(senha_digitada):
     """Verifica se a senha bate com a planilha"""
     df_config = get_config_data()
     if not df_config.empty:
-        # Procura a linha onde chave é 'senha_admin'
-        senha_real = df_config.loc[df_config['chave'] == 'senha_admin', 'valor'].values[0]
-        return str(senha_real) == str(senha_digitada)
-    return senha_digitada == "admin123" # Fallback se não tiver aba config
+        try:
+            senha_real = df_config.loc[df_config['chave'] == 'senha_admin', 'valor'].values[0]
+            return str(senha_real) == str(senha_digitada)
+        except:
+            return senha_digitada == "admin123"
+    return senha_digitada == "admin123"
 
 def alterar_senha(nova_senha):
     """Atualiza a senha na aba config"""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df_config = get_config_data()
-        
         # Atualiza o valor
         df_config.loc[df_config['chave'] == 'senha_admin', 'valor'] = nova_senha
-        
         conn.update(worksheet="config", data=df_config)
         return True
     except Exception as e:
@@ -118,15 +118,13 @@ query_params = st.query_params
 modo_admin = query_params.get("acesso") == "admin"
 
 if modo_admin:
-    # === ÁREA ADMIN COMPLETA ===
+    # === ÁREA ADMIN ===
     st.markdown("### 🔒 Gestão Integrada")
     
-    # Inicializa estado de login
     if 'logado' not in st.session_state:
         st.session_state['logado'] = False
 
     if not st.session_state['logado']:
-        # TELA DE LOGIN
         c1, c2, c3 = st.columns([1,1,1])
         with c2:
             st.markdown('<div class="content-card">', unsafe_allow_html=True)
@@ -141,7 +139,6 @@ if modo_admin:
             st.markdown('</div>', unsafe_allow_html=True)
     
     else:
-        # TELA LOGADA (DASHBOARD + CONFIG)
         tab_dash, tab_conf = st.tabs(["📊 Dashboard", "⚙️ Configurações"])
         
         with tab_dash:
@@ -153,12 +150,14 @@ if modo_admin:
                     ultimo = df['data'].iloc[-1] if 'data' in df.columns else "Agora"
                     
                     k1, k2, k3 = st.columns(3)
-                    k1.metric("Total", total); k2.metric("Média", f"{media:.1f}"); k3.metric("Última", ultimo)
+                    k1.metric("Total", total); k2.metric("Média", f"{media:.1f}"); k3.metric("Última Interação", ultimo)
                     st.divider()
                     c1, c2 = st.columns(2)
                     if 'categoria' in df.columns: c1.bar_chart(df['categoria'].value_counts(), color="#3B82F6")
                     if 'nota' in df.columns: c2.line_chart(df['nota'], color="#6366F1")
-                    st.dataframe(df, use_container_width=True)
+                    
+                    # AQUI ESTÁ A CORREÇÃO DA TABELA (hide_index=True)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
                 else:
                     st.info("Sem dados ainda.")
             except:
@@ -169,14 +168,11 @@ if modo_admin:
             st.warning("Alteração de Senha de Acesso")
             n1 = st.text_input("Nova Senha", type="password")
             n2 = st.text_input("Confirme a Nova Senha", type="password")
-            
             if st.button("Salvar Nova Senha"):
                 if n1 == n2 and n1:
-                    if alterar_senha(n1):
-                        st.success("✅ Senha alterada na planilha! Use a nova senha no próximo login.")
+                    if alterar_senha(n1): st.success("✅ Senha alterada!")
                 else:
-                    st.error("As senhas não conferem ou estão vazias.")
-            
+                    st.error("Erro na validação.")
             st.markdown("---")
             if st.button("Sair (Logout)"):
                 st.session_state['logado'] = False
@@ -184,7 +180,7 @@ if modo_admin:
             st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    # === ÁREA PÚBLICA (CLIENTE) ===
+    # === ÁREA PÚBLICA ===
     st.markdown(f"""
         <div class="hero-container">
             <div style="display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; gap: 2rem;">
@@ -230,12 +226,14 @@ else:
                     motivo = st.text_area("Mensagem", placeholder="Escreva aqui...")
                     st.write("")
                     priv = st.checkbox("Concordo com a Política de Privacidade.")
+                    
                     if st.form_submit_button("Enviar Avaliação"):
                         if not priv: st.error("Aceite a privacidade.")
                         elif cat == "": st.error("Escolha um Assunto.")
                         else:
                             if salvar_feedback(nome, nota, motivo, cat):
-                                st.success("✅ Feedback salvo no Google Sheets!")
-                                st.balloons()
+                                # MENSAGEM CORRIGIDA AQUI
+                                st.success("✅ Feedback enviado!")
+                                st.markdown("**Obrigado por enviar.** Sua opinião é muito importante para nós.")
+                                # BALÕES REMOVIDOS
                 st.markdown('</div>', unsafe_allow_html=True)
-
