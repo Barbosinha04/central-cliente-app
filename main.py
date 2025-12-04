@@ -12,21 +12,26 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CONEXÃO COM GOOGLE SHEETS (BANCO DE DADOS ETERNO) ---
-def get_data():
-    """Lê os dados da planilha e retorna um DataFrame limpo"""
-    # Cria a conexão usando os segredos que você configurou
+# --- CONEXÃO COM GOOGLE SHEETS ---
+def get_feedback_data():
+    """Lê os feedbacks da aba padrão (Página1)"""
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # TTL=0 garante que não pegamos dados velhos do cache
-    return conn.read(ttl=0)
+    return conn.read(worksheet="Página1", ttl=0)
+
+def get_config_data():
+    """Lê a senha da aba 'config'"""
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    try:
+        return conn.read(worksheet="config", ttl=0)
+    except:
+        return pd.DataFrame()
 
 def salvar_feedback(nome, nota, motivo, categoria):
-    """Adiciona uma nova linha na planilha"""
+    """Salva feedback na Página1"""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        data_atual = get_data()
+        data_atual = get_feedback_data()
         
-        # Cria a nova linha com os dados do formulário
         nova_linha = pd.DataFrame([{
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "nome": nome if nome else "Anônimo",
@@ -35,15 +40,38 @@ def salvar_feedback(nome, nota, motivo, categoria):
             "categoria": categoria
         }])
         
-        # Junta o antigo com o novo e atualiza a planilha
-        df_atualizado = pd.concat([data_atual, nova_linha], ignore_index=True)
-        conn.update(data=df_atualizado)
+        df_final = pd.concat([data_atual, nova_linha], ignore_index=True)
+        conn.update(worksheet="Página1", data=df_final)
         return True
     except Exception as e:
-        st.error(f"Erro de conexão. Verifique se o robô é Editor da planilha. Detalhe: {e}")
+        st.error(f"Erro ao salvar: {e}")
         return False
 
-# --- ASSETS VISUAIS ---
+def verificar_senha(senha_digitada):
+    """Verifica se a senha bate com a planilha"""
+    df_config = get_config_data()
+    if not df_config.empty:
+        # Procura a linha onde chave é 'senha_admin'
+        senha_real = df_config.loc[df_config['chave'] == 'senha_admin', 'valor'].values[0]
+        return str(senha_real) == str(senha_digitada)
+    return senha_digitada == "admin123" # Fallback se não tiver aba config
+
+def alterar_senha(nova_senha):
+    """Atualiza a senha na aba config"""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df_config = get_config_data()
+        
+        # Atualiza o valor
+        df_config.loc[df_config['chave'] == 'senha_admin', 'valor'] = nova_senha
+        
+        conn.update(worksheet="config", data=df_config)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao trocar senha: {e}")
+        return False
+
+# --- ASSETS ---
 HERO_IMAGE_URL = "https://images.unsplash.com/photo-1522071820081-009f0129c71c?q=80&w=2070&auto=format&fit=crop"
 BOT_AVATAR_URL = "https://api.iconify.design/fluent:bot-24-filled.svg?color=%232563EB"
 USER_AVATAR_URL = "https://api.iconify.design/solar:user-circle-bold.svg?color=%23475569"
@@ -62,14 +90,13 @@ def responder_bot(msg):
         if k in msg: return v
     return BASE_CONHECIMENTO["default"]
 
-# --- CSS PREMIUM ---
+# --- CSS ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"] {font-family: 'Inter', sans-serif;}
     .stApp {background-color: #F8FAFC;}
     #MainMenu, footer, header {visibility: hidden;}
-    
     .hero-container {
         background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);
         padding: 4rem 2rem; border-radius: 0 0 24px 24px; color: white; margin-bottom: 3rem;
@@ -91,54 +118,79 @@ query_params = st.query_params
 modo_admin = query_params.get("acesso") == "admin"
 
 if modo_admin:
-    # === ÁREA ADMIN (Conectada ao Google Sheets) ===
+    # === ÁREA ADMIN COMPLETA ===
     st.markdown("### 🔒 Gestão Integrada")
     
-    # Login fixo para facilitar (pode melhorar depois)
-    senha = st.text_input("Senha Mestra", type="password")
+    # Inicializa estado de login
+    if 'logado' not in st.session_state:
+        st.session_state['logado'] = False
+
+    if not st.session_state['logado']:
+        # TELA DE LOGIN
+        c1, c2, c3 = st.columns([1,1,1])
+        with c2:
+            st.markdown('<div class="content-card">', unsafe_allow_html=True)
+            st.info("Acesso Restrito")
+            senha_digitada = st.text_input("Senha", type="password")
+            if st.button("Entrar"):
+                if verificar_senha(senha_digitada):
+                    st.session_state['logado'] = True
+                    st.rerun()
+                else:
+                    st.error("Senha incorreta.")
+            st.markdown('</div>', unsafe_allow_html=True)
     
-    if senha == "admin123":
-        try:
-            df = get_data()
+    else:
+        # TELA LOGADA (DASHBOARD + CONFIG)
+        tab_dash, tab_conf = st.tabs(["📊 Dashboard", "⚙️ Configurações"])
+        
+        with tab_dash:
+            try:
+                df = get_feedback_data()
+                if not df.empty and 'nota' in df.columns:
+                    total = len(df)
+                    media = df['nota'].mean()
+                    ultimo = df['data'].iloc[-1] if 'data' in df.columns else "Agora"
+                    
+                    k1, k2, k3 = st.columns(3)
+                    k1.metric("Total", total); k2.metric("Média", f"{media:.1f}"); k3.metric("Última", ultimo)
+                    st.divider()
+                    c1, c2 = st.columns(2)
+                    if 'categoria' in df.columns: c1.bar_chart(df['categoria'].value_counts(), color="#3B82F6")
+                    if 'nota' in df.columns: c2.line_chart(df['nota'], color="#6366F1")
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.info("Sem dados ainda.")
+            except:
+                st.warning("Conectando...")
+
+        with tab_conf:
+            st.markdown('<div class="content-card">', unsafe_allow_html=True)
+            st.warning("Alteração de Senha de Acesso")
+            n1 = st.text_input("Nova Senha", type="password")
+            n2 = st.text_input("Confirme a Nova Senha", type="password")
             
-            if not df.empty and 'nota' in df.columns:
-                total = len(df)
-                media = df['nota'].mean()
-                ultimo = df['data'].iloc[-1] if 'data' in df.columns else "Agora"
-                
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Total", total)
-                k2.metric("Média", f"{media:.1f}")
-                k3.metric("Última Interação", ultimo)
-                
-                st.divider()
-                
-                c1, c2 = st.columns(2)
-                if 'categoria' in df.columns:
-                    c1.bar_chart(df['categoria'].value_counts(), color="#3B82F6")
-                if 'nota' in df.columns:
-                    c2.line_chart(df['nota'], color="#6366F1")
-                
-                st.dataframe(df, use_container_width=True)
-            else:
-                st.info("A planilha está conectada, mas ainda não tem dados de feedback.")
-                
-        except Exception as e:
-            st.warning("Conectando à planilha... Se demorar, verifique se o email do robô é 'Editor' no Google Sheets.")
+            if st.button("Salvar Nova Senha"):
+                if n1 == n2 and n1:
+                    if alterar_senha(n1):
+                        st.success("✅ Senha alterada na planilha! Use a nova senha no próximo login.")
+                else:
+                    st.error("As senhas não conferem ou estão vazias.")
             
-    elif senha:
-        st.error("Senha incorreta.")
+            st.markdown("---")
+            if st.button("Sair (Logout)"):
+                st.session_state['logado'] = False
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    # === ÁREA PÚBLICA (Visual Tech Azul) ===
+    # === ÁREA PÚBLICA (CLIENTE) ===
     st.markdown(f"""
         <div class="hero-container">
             <div style="display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; gap: 2rem;">
                 <div style="flex: 1;">
                     <h1 class="hero-title">Central de <br>Sucesso do Cliente</h1>
-                    <p style="font-size: 1.2rem; opacity: 0.9;">
-                        Canal oficial. Seus dados são salvos com segurança na nuvem.
-                    </p>
+                    <p style="font-size: 1.2rem; opacity: 0.9;">Canal oficial. Seus dados são salvos com segurança.</p>
                 </div>
                 <div style="flex: 1; text-align: right;">
                     <img src="{HERO_IMAGE_URL}" style="border-radius: 16px; width: 100%; max-height: 300px; object-fit: cover; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
@@ -152,49 +204,38 @@ else:
         with c_main:
             tab_chat, tab_form = st.tabs(["🤖 Assistente Virtual", "⭐ Avaliar Experiência"])
             
-            # CHAT
             with tab_chat:
                 st.write("")
                 if "msgs" not in st.session_state: st.session_state.msgs = [{"role":"assistant", "content":"Olá! Sou a IA da empresa. Como posso ajudar?"}]
                 for m in st.session_state.msgs:
-                    avatar_icon = BOT_AVATAR_URL if m["role"] == "assistant" else USER_AVATAR_URL
-                    with st.chat_message(m["role"], avatar=avatar_icon): st.write(m["content"])
-                
-                if prompt := st.chat_input("Digite sua dúvida..."):
-                    st.session_state.msgs.append({"role":"user", "content":prompt})
-                    with st.chat_message("user", avatar=USER_AVATAR_URL): st.write(prompt)
+                    av = BOT_AVATAR_URL if m["role"]=="assistant" else USER_AVATAR_URL
+                    with st.chat_message(m["role"], avatar=av): st.write(m["content"])
+                if p := st.chat_input("Dúvida?"):
+                    st.session_state.msgs.append({"role":"user", "content":p})
+                    with st.chat_message("user", avatar=USER_AVATAR_URL): st.write(p)
                     time.sleep(0.4)
-                    resp = responder_bot(prompt)
-                    st.session_state.msgs.append({"role":"assistant", "content":resp})
-                    with st.chat_message("assistant", avatar=BOT_AVATAR_URL): st.write(resp)
+                    r = responder_bot(p)
+                    st.session_state.msgs.append({"role":"assistant", "content":r})
+                    with st.chat_message("assistant", avatar=BOT_AVATAR_URL): st.write(r)
 
-            # FORMULÁRIO (SALVA NO GOOGLE)
             with tab_form:
                 st.write("")
                 st.markdown('<div class="content-card">', unsafe_allow_html=True)
                 st.subheader("Sua opinião importa")
-                
                 with st.form("feed_form"):
                     c1, c2 = st.columns(2)
                     with c1: nome = st.text_input("Nome (Opcional)")
-                    with c2: 
-                        cat = st.selectbox("Assunto *", ["", "Elogio", "Sugestão", "Reclamação", "Dúvida"], format_func=lambda x: "Selecione..." if x == "" else x)
-                    
-                    nota = st.slider("Nota de Satisfação", 1, 10, 10)
+                    with c2: cat = st.selectbox("Assunto *", ["", "Elogio", "Sugestão", "Reclamação", "Dúvida"], format_func=lambda x: "Selecione..." if x == "" else x)
+                    nota = st.slider("Nota", 1, 10, 10)
                     motivo = st.text_area("Mensagem", placeholder="Escreva aqui...")
-                    
                     st.write("")
                     priv = st.checkbox("Concordo com a Política de Privacidade.")
-                    
-                    sub = st.form_submit_button("Enviar Avaliação")
-                    
-                    if sub:
-                        if not priv: st.error("Aceite a política de privacidade.")
+                    if st.form_submit_button("Enviar Avaliação"):
+                        if not priv: st.error("Aceite a privacidade.")
                         elif cat == "": st.error("Escolha um Assunto.")
                         else:
-                            # TENTA SALVAR NA PLANILHA
-                            sucesso = salvar_feedback(nome, nota, motivo, cat)
-                            if sucesso:
-                                st.success("✅ Feedback salvo com sucesso no Google Sheets!")
+                            if salvar_feedback(nome, nota, motivo, cat):
+                                st.success("✅ Feedback salvo no Google Sheets!")
                                 st.balloons()
                 st.markdown('</div>', unsafe_allow_html=True)
+
