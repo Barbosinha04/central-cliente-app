@@ -21,7 +21,6 @@ def get_config_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
         df = conn.read(worksheet="config", ttl=0)
-        # BLINDAGEM: Remove espaços invisíveis dos nomes das colunas
         df.columns = df.columns.str.strip()
         return df
     except:
@@ -47,14 +46,22 @@ def salvar_feedback(nome, nota, motivo, categoria):
         st.error(f"Erro ao salvar: {e}")
         return False
 
+# --- FUNÇÃO DE SENHA INTELIGENTE (CORRIGIDA) ---
 def verificar_senha(senha_digitada):
     df_config = get_config_data()
     if not df_config.empty:
         try:
-            # Garante que lê como texto e remove espaços
             linha = df_config[df_config['chave'] == 'senha_admin']
             if not linha.empty:
-                senha_real = str(linha['valor'].values[0]).strip()
+                valor_planilha = linha['valor'].values[0]
+                
+                # LÓGICA DE CORREÇÃO NUMÉRICA
+                # Se o Google mandar número (ex: 123.0), converte pra 123 (int) e depois texto
+                if isinstance(valor_planilha, (int, float)):
+                    senha_real = str(int(valor_planilha)).strip()
+                else:
+                    senha_real = str(valor_planilha).strip()
+                
                 return senha_real == str(senha_digitada).strip()
         except:
             pass
@@ -65,7 +72,8 @@ def alterar_senha(nova_senha):
         conn = st.connection("gsheets", type=GSheetsConnection)
         df_config = get_config_data()
         
-        # Atualiza o valor
+        # Garante que a senha nova entre como texto (aspas simples na frente evita o bug do Google)
+        # Mas o código de leitura já resolve, então salvamos normal
         df_config.loc[df_config['chave'] == 'senha_admin', 'valor'] = nova_senha
         conn.update(worksheet="config", data=df_config)
         return True
@@ -133,7 +141,6 @@ if modo_admin:
             st.info("Acesso Restrito")
             senha_digitada = st.text_input("Senha", type="password")
             if st.button("Entrar"):
-                # Debug silencioso: printa no console se houver erro
                 if verificar_senha(senha_digitada):
                     st.session_state['logado'] = True
                     st.rerun()
